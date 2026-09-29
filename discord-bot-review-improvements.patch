@@ -1,0 +1,376 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..2044c42
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,8 @@
++# Copy this file to .env, then replace the placeholder values locally.
++# Never commit .env or paste your real Discord token into source code.
++
++DISCORD_TOKEN=replace_with_your_bot_token
++OWNER_ID=replace_with_your_discord_user_id
++
++# Optional: a development server ID. Commands will appear there immediately.
++# GUILD_ID=replace_with_your_test_server_id
+diff --git a/.gitignore b/.gitignore
+index 76f3222..3315818 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,6 +1,7 @@
+ # Secrets — never upload these
+ .env
+ .env.*
++!.env.example
+ token.txt
+ secrets.json
+ config.json
+diff --git a/CODE_REVIEW.md b/CODE_REVIEW.md
+new file mode 100644
+index 0000000..c5cca35
+--- /dev/null
++++ b/CODE_REVIEW.md
+@@ -0,0 +1,92 @@
++# Code review — September 29, 2026
++
++## What was checked
++
++- Parsed every Python source file with `py_compile`.
++- Installed the declared Discord dependencies and ran a non-Discord game smoke test against a temporary SQLite database.
++- Tested catalog/story synchronization, a pull, ownership lookup, 3-hero battle simulation, and all three authored story encounters.
++- Added and ran regression tests for party ownership and party placement.
++
++### Result
++
++The source parses successfully and the core game smoke test passed:
++
++- 15 catalog heroes synchronized
++- 12 heroes in the default banner pool
++- 3 story chapters loaded and simulated
++- Pull, battle, and owned-hero lookup flows completed without errors
++
++## Improvements included in this working copy
++
++### 1. Prevented party-instance cloning and cross-account placements
++
++`database.set_party_slot()` now:
++
++- verifies that the selected `user_warriors.id` belongs to the player;
++- returns `False` rather than attaching another player's character to a party;
++- moves an existing character instance to its new slot instead of allowing the same exact copy in several slots;
++- removes old duplicate placements left by previous versions.
++
++Different copies of the same catalog hero remain valid party members, because each owned copy has its own `user_warriors.id`.
++
++The two UI callers now show an appropriate refresh message if a stale menu selection refers to a character that no longer exists.
++
++### 2. Added regression tests
++
++`tests/test_database_party.py` verifies:
++
++- an owned warrior can be fetched only by its owner;
++- moving a character changes its slot rather than cloning it;
++- a player cannot place another player's character in their party.
++
++Run them with:
++
++```bash
++python -m unittest discover -s tests -v
++```
++
++### 3. Added onboarding and secret-safety files
++
++- Replaced the one-line `README.md` with setup, environment, command, testing, and data-safety instructions.
++- Added `.env.example` with safe placeholder values.
++- Updated `.gitignore` so `.env.example` is not accidentally ignored.
++
++## Important actions to take now
++
++### Remove `gacha.db` from the public repository
++
++The public repository currently tracks `gacha.db`. It has player IDs, display names, inventory, parties, and progression data. It does not appear to be a bot-token exposure, but it is live player data and should not be public.
++
++1. Keep your local working `gacha.db` file — that is the game data your bot uses.
++2. Delete `gacha.db` from GitHub's repository file list.
++3. Because it was included in the upload commit, simply deleting it does **not** remove it from Git history. Since this is a newly created repository, the simplest privacy-clean option is to create a fresh repository without `gacha.db`, or rewrite the repository history before sharing it further.
++4. Do not manually upload `gacha.db` in the GitHub web uploader again. `.gitignore` does not stop files that have already been tracked, and browser uploads require you to avoid selecting ignored files yourself.
++
++## Recommended next improvements
++
++### High priority: make economy-changing actions transactional
++
++A pull currently changes the Charm balance, adds each hero, updates pity, and records daily progress in separate database commits. If the bot process or database fails midway through a 10-pull, the account can be charged while receiving only part of the result, or pity can be incorrect.
++
++Create database-layer transaction functions for these multi-step actions:
++
++- pull(s): deduct Charms + add copies + update pity + record task progress;
++- shop purchases: deduct Solite + add Charms/Memory Stones/avatar;
++- daily claim: mark claim + grant Solite;
++- story win: grant all rewards + advance chapter + update stage.
++
++SQLite transactions make each action succeed entirely or not at all.
++
++### Medium priority: move startup work from `on_ready()` to `setup_hook()`
++
++`on_ready()` can run again after a reconnect. The bot currently runs database initialization, content synchronization, and global slash-command synchronization there. Repeated global command syncs can be slow or rate-limited.
++
++Keep logging in `on_ready()`, but perform one-time startup work in `setup_hook()` and guard any reconnect-sensitive work.
++
++### Medium priority: keep synchronous SQLite work off Discord's event loop as usage grows
++
++The current database is small and responds quickly, but most SQLite calls run directly inside async interaction handlers. With more players or slower hosting storage, interaction latency can increase. The bot already uses `asyncio.to_thread()` well for image work and battle simulation; the same approach or an async database layer can be applied to database-heavy screens and transactions.
++
++### Low priority: linter/type cleanup
++
++`ruff` reports 38 mostly non-blocking style/type-maintenance findings (unused imports, import ordering, overly broad exception handlers, and similar cleanup). The game smoke test passed, so these are not launch blockers. Address them gradually; do not blindly auto-fix broad exception handling without adding useful logging.
+diff --git a/README.md b/README.md
+index 0f363bf..06c03f8 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,77 @@
+-# My-discord-bot
+-My gacha discord bot
++# My Discord Gacha Bot
++
++A Python `discord.py` gacha / party-battle bot with hero pulls, character progression, a food lab, story battles, admin tools, and generated card art.
++
++## Requirements
++
++- Python **3.10+**
++- A Discord application and bot token from the [Discord Developer Portal](https://discord.com/developers/applications)
++
++## Local setup
++
++```bash
++# Clone the repository, then enter it
++cd My-discord-bot
++
++# Optional but recommended: create and activate a virtual environment
++python -m venv .venv
++# Windows PowerShell: .venv\Scripts\Activate.ps1
++# macOS/Linux: source .venv/bin/activate
++
++# Install the bot dependencies
++python -m pip install -r requirements.txt
++
++# Create your local secrets file from the safe template
++# Windows PowerShell: Copy-Item .env.example .env
++# macOS/Linux: cp .env.example .env
++```
++
++Edit `.env` and add the values below:
++
++```dotenv
++DISCORD_TOKEN=your_real_bot_token_here
++OWNER_ID=your_discord_user_id
++# Optional: shows slash-command changes immediately in this test server
++GUILD_ID=your_test_server_id
++```
++
++> **Never commit or share `.env`, a bot token, API key, or a live player database.** If a Discord token is ever exposed, reset it in **Discord Developer Portal → Bot → Reset Token** immediately.
++
++In the Discord Developer Portal, enable the bot's **Message Content Intent** and **Server Members Intent**, then start it:
++
++```bash
++python bot.py
++```
++
++## Useful commands
++
++- `/pull` — summon heroes
++- `/heroes`, `/book`, `/profile`, `/inventory` — view progression
++- `/party view`, `/party set`, `/party clear` — manage the battle team
++- `/level` — play story chapters and battles
++- `/lab` — convert heroes to food and upgrade food
++- `/shop`, `/daily` — economy and daily tasks
++- `/admin ...` — owner-only administration commands; requires `OWNER_ID`
++
++## Content files
++
++- `heroes.csv` — hero roster, stats, skills, banners, and cooldowns
++- `story_chapters.csv` — story and chapter enemy/reward data
++- `Assets/` — card art, full art, banners, avatars, icons, and story images
++- `config.py` — shared battle and progression tuning values
++
++The bot synchronizes CSV-authored heroes and story chapters to the local SQLite database on startup.
++
++## Testing
++
++Run the regression tests with:
++
++```bash
++python -m unittest discover -s tests -v
++```
++
++For balance experimentation, `balance_tune.py` runs simulations against a throwaway database and writes `heroes_tuned.csv`; review that output before replacing `heroes.csv`.
++
++## Data and Git safety
++
++`gacha.db` is the live local SQLite database. It contains player IDs, display names, inventory, party, and progression, so it must stay local. It is ignored by `.gitignore` for new Git commits; do not upload it manually through the GitHub website either.
+diff --git a/bot.py b/bot.py
+index af08f28..6071672 100644
+--- a/bot.py
++++ b/bot.py
+@@ -1807,7 +1807,12 @@ async def party_set(interaction: discord.Interaction, position: app_commands.Cho
+         return
+ 
+     warrior = matches[0]
+-    database.set_party_slot(interaction.user.id, position.value, warrior["id"])
++    if not database.set_party_slot(interaction.user.id, position.value, warrior["id"]):
++        await interaction.response.send_message(
++            "That warrior is no longer in your collection. Refresh `/party view` and try again.",
++            ephemeral=True,
++        )
++        return
+     track_progress(interaction.user.id, "set_party")
+ 
+     await send_party_response(interaction, content=f"Placed **{warrior['name']}** in Slot {position.value}.")
+@@ -3034,7 +3039,12 @@ class EditWarriorSelect(discord.ui.Select):
+             await interaction.response.send_message("This isn't your party panel.", ephemeral=True)
+             return
+         user_warrior_id = int(self.values[0])
+-        database.set_party_slot(self.user_id, self.position, user_warrior_id)
++        if not database.set_party_slot(self.user_id, self.position, user_warrior_id):
++            await interaction.response.send_message(
++                "That warrior is no longer in your collection. Reopen `/level` and try again.",
++                ephemeral=True,
++            )
++            return
+ 
+         chapter = database.get_story_chapter(self.chapter_number)
+         embed = build_party_panel_embed(self.user_id, chapter)
+diff --git a/database.py b/database.py
+index cac8934..2cf590e 100644
+--- a/database.py
++++ b/database.py
+@@ -1397,17 +1397,41 @@ def upsert_catalog_warrior(warrior: dict):
+     return warrior_id, was_new
+ 
+ 
+-def set_party_slot(user_id: int, position: int, user_warrior_id: int):
+-    """Places a specific owned warrior (by its user_warriors.id) into a party slot (1-6)."""
++def set_party_slot(user_id: int, position: int, user_warrior_id: int) -> bool:
++    """Place one owned warrior instance in a party slot.
++
++    A single owned *instance* may only occupy one slot.  If it was already in
++    this player's party, it is moved to the requested slot instead of being
++    silently cloned across the formation.  Separate duplicate copies remain
++    valid because they have different ``user_warriors.id`` values.
++
++    Returns ``False`` if the requested instance does not belong to ``user_id``.
++    """
+     conn = get_connection()
+-    cur = conn.cursor()
+-    cur.execute(
+-        "INSERT INTO user_party (user_id, position, user_warrior_id) VALUES (?, ?, ?) "
+-        "ON CONFLICT(user_id, position) DO UPDATE SET user_warrior_id = excluded.user_warrior_id",
+-        (user_id, position, user_warrior_id),
+-    )
+-    conn.commit()
+-    conn.close()
++    try:
++        cur = conn.cursor()
++        owned = cur.execute(
++            "SELECT 1 FROM user_warriors WHERE user_id = ? AND id = ?",
++            (user_id, user_warrior_id),
++        ).fetchone()
++        if not owned:
++            return False
++
++        # Moving an existing member should leave its old slot empty. This also
++        # cleans up any duplicate placements made by older versions of the bot.
++        cur.execute(
++            "DELETE FROM user_party WHERE user_id = ? AND user_warrior_id = ?",
++            (user_id, user_warrior_id),
++        )
++        cur.execute(
++            "INSERT INTO user_party (user_id, position, user_warrior_id) VALUES (?, ?, ?) "
++            "ON CONFLICT(user_id, position) DO UPDATE SET user_warrior_id = excluded.user_warrior_id",
++            (user_id, position, user_warrior_id),
++        )
++        conn.commit()
++        return True
++    finally:
++        conn.close()
+ 
+ 
+ def clear_party_slot(user_id: int, position: int):
+diff --git a/tests/test_database_party.py b/tests/test_database_party.py
+new file mode 100644
+index 0000000..08148d5
+--- /dev/null
++++ b/tests/test_database_party.py
+@@ -0,0 +1,74 @@
++"""Regression tests for party ownership and placement rules."""
++
++from __future__ import annotations
++
++import os
++import tempfile
++import unittest
++
++import database
++
++
++class PartyDatabaseTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.temp_dir = tempfile.TemporaryDirectory()
++        self.old_db_path = database.DB_PATH
++        self.old_catalog_cache = database._catalog_cache
++        database.DB_PATH = os.path.join(self.temp_dir.name, "test-gacha.db")
++        database._catalog_cache = None
++        database.init_db()
++
++        database.get_or_create_user(1001, "Player One")
++        database.get_or_create_user(2002, "Player Two")
++
++        conn = database.get_connection()
++        try:
++            cursor = conn.execute(
++                """
++                INSERT INTO warrior_catalog
++                    (name, element, rarity, base_hp, base_atk, base_def, base_matk, base_mdef, base_speed)
++                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++                """,
++                ("Test Hero", "Blaze", "Radiant", 100, 20, 10, 20, 10, 10),
++            )
++            self.warrior_id = cursor.lastrowid
++            conn.commit()
++        finally:
++            conn.close()
++
++        self.first_copy = database.add_warrior_to_user(1001, self.warrior_id)["instance_id"]
++        self.second_copy = database.add_warrior_to_user(1001, self.warrior_id)["instance_id"]
++        self.other_players_copy = database.add_warrior_to_user(2002, self.warrior_id)["instance_id"]
++
++    def tearDown(self) -> None:
++        database.DB_PATH = self.old_db_path
++        database._catalog_cache = self.old_catalog_cache
++        self.temp_dir.cleanup()
++
++    def test_get_user_warrior_returns_only_the_owners_copy(self) -> None:
++        warrior = database.get_user_warrior(1001, self.first_copy)
++        self.assertIsNotNone(warrior)
++        self.assertEqual(warrior["id"], self.first_copy)
++        self.assertIsNone(database.get_user_warrior(2002, self.first_copy))
++
++    def test_party_moves_an_instance_instead_of_cloning_it(self) -> None:
++        self.assertTrue(database.set_party_slot(1001, 1, self.first_copy))
++        self.assertTrue(database.set_party_slot(1001, 4, self.first_copy))
++        self.assertTrue(database.set_party_slot(1001, 2, self.second_copy))
++
++        party = database.get_party(1001)
++        self.assertEqual(set(party), {2, 4})
++        self.assertEqual(party[2]["user_warrior_id"], self.second_copy)
++        self.assertEqual(party[4]["user_warrior_id"], self.first_copy)
++
++    def test_party_rejects_another_players_instance(self) -> None:
++        self.assertTrue(database.set_party_slot(1001, 1, self.first_copy))
++        self.assertFalse(database.set_party_slot(1001, 2, self.other_players_copy))
++
++        party = database.get_party(1001)
++        self.assertEqual(set(party), {1})
++        self.assertEqual(party[1]["user_warrior_id"], self.first_copy)
++
++
++if __name__ == "__main__":
++    unittest.main()

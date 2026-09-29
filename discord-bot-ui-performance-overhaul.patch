@@ -1,0 +1,1560 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..2044c42
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,8 @@
++# Copy this file to .env, then replace the placeholder values locally.
++# Never commit .env or paste your real Discord token into source code.
++
++DISCORD_TOKEN=replace_with_your_bot_token
++OWNER_ID=replace_with_your_discord_user_id
++
++# Optional: a development server ID. Commands will appear there immediately.
++# GUILD_ID=replace_with_your_test_server_id
+diff --git a/.gitignore b/.gitignore
+index 76f3222..3315818 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,6 +1,7 @@
+ # Secrets — never upload these
+ .env
+ .env.*
++!.env.example
+ token.txt
+ secrets.json
+ config.json
+diff --git a/CODE_REVIEW.md b/CODE_REVIEW.md
+new file mode 100644
+index 0000000..c5cca35
+--- /dev/null
++++ b/CODE_REVIEW.md
+@@ -0,0 +1,92 @@
++# Code review — September 29, 2026
++
++## What was checked
++
++- Parsed every Python source file with `py_compile`.
++- Installed the declared Discord dependencies and ran a non-Discord game smoke test against a temporary SQLite database.
++- Tested catalog/story synchronization, a pull, ownership lookup, 3-hero battle simulation, and all three authored story encounters.
++- Added and ran regression tests for party ownership and party placement.
++
++### Result
++
++The source parses successfully and the core game smoke test passed:
++
++- 15 catalog heroes synchronized
++- 12 heroes in the default banner pool
++- 3 story chapters loaded and simulated
++- Pull, battle, and owned-hero lookup flows completed without errors
++
++## Improvements included in this working copy
++
++### 1. Prevented party-instance cloning and cross-account placements
++
++`database.set_party_slot()` now:
++
++- verifies that the selected `user_warriors.id` belongs to the player;
++- returns `False` rather than attaching another player's character to a party;
++- moves an existing character instance to its new slot instead of allowing the same exact copy in several slots;
++- removes old duplicate placements left by previous versions.
++
++Different copies of the same catalog hero remain valid party members, because each owned copy has its own `user_warriors.id`.
++
++The two UI callers now show an appropriate refresh message if a stale menu selection refers to a character that no longer exists.
++
++### 2. Added regression tests
++
++`tests/test_database_party.py` verifies:
++
++- an owned warrior can be fetched only by its owner;
++- moving a character changes its slot rather than cloning it;
++- a player cannot place another player's character in their party.
++
++Run them with:
++
++```bash
++python -m unittest discover -s tests -v
++```
++
++### 3. Added onboarding and secret-safety files
++
++- Replaced the one-line `README.md` with setup, environment, command, testing, and data-safety instructions.
++- Added `.env.example` with safe placeholder values.
++- Updated `.gitignore` so `.env.example` is not accidentally ignored.
++
++## Important actions to take now
++
++### Remove `gacha.db` from the public repository
++
++The public repository currently tracks `gacha.db`. It has player IDs, display names, inventory, parties, and progression data. It does not appear to be a bot-token exposure, but it is live player data and should not be public.
++
++1. Keep your local working `gacha.db` file — that is the game data your bot uses.
++2. Delete `gacha.db` from GitHub's repository file list.
++3. Because it was included in the upload commit, simply deleting it does **not** remove it from Git history. Since this is a newly created repository, the simplest privacy-clean option is to create a fresh repository without `gacha.db`, or rewrite the repository history before sharing it further.
++4. Do not manually upload `gacha.db` in the GitHub web uploader again. `.gitignore` does not stop files that have already been tracked, and browser uploads require you to avoid selecting ignored files yourself.
++
++## Recommended next improvements
++
++### High priority: make economy-changing actions transactional
++
++A pull currently changes the Charm balance, adds each hero, updates pity, and records daily progress in separate database commits. If the bot process or database fails midway through a 10-pull, the account can be charged while receiving only part of the result, or pity can be incorrect.
++
++Create database-layer transaction functions for these multi-step actions:
++
++- pull(s): deduct Charms + add copies + update pity + record task progress;
++- shop purchases: deduct Solite + add Charms/Memory Stones/avatar;
++- daily claim: mark claim + grant Solite;
++- story win: grant all rewards + advance chapter + update stage.
++
++SQLite transactions make each action succeed entirely or not at all.
++
++### Medium priority: move startup work from `on_ready()` to `setup_hook()`
++
++`on_ready()` can run again after a reconnect. The bot currently runs database initialization, content synchronization, and global slash-command synchronization there. Repeated global command syncs can be slow or rate-limited.
++
++Keep logging in `on_ready()`, but perform one-time startup work in `setup_hook()` and guard any reconnect-sensitive work.
++
++### Medium priority: keep synchronous SQLite work off Discord's event loop as usage grows
++
++The current database is small and responds quickly, but most SQLite calls run directly inside async interaction handlers. With more players or slower hosting storage, interaction latency can increase. The bot already uses `asyncio.to_thread()` well for image work and battle simulation; the same approach or an async database layer can be applied to database-heavy screens and transactions.
++
++### Low priority: linter/type cleanup
++
++`ruff` reports 38 mostly non-blocking style/type-maintenance findings (unused imports, import ordering, overly broad exception handlers, and similar cleanup). The game smoke test passed, so these are not launch blockers. Address them gradually; do not blindly auto-fix broad exception handling without adding useful logging.
+diff --git a/README.md b/README.md
+index 0f363bf..06c03f8 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,77 @@
+-# My-discord-bot
+-My gacha discord bot
++# My Discord Gacha Bot
++
++A Python `discord.py` gacha / party-battle bot with hero pulls, character progression, a food lab, story battles, admin tools, and generated card art.
++
++## Requirements
++
++- Python **3.10+**
++- A Discord application and bot token from the [Discord Developer Portal](https://discord.com/developers/applications)
++
++## Local setup
++
++```bash
++# Clone the repository, then enter it
++cd My-discord-bot
++
++# Optional but recommended: create and activate a virtual environment
++python -m venv .venv
++# Windows PowerShell: .venv\Scripts\Activate.ps1
++# macOS/Linux: source .venv/bin/activate
++
++# Install the bot dependencies
++python -m pip install -r requirements.txt
++
++# Create your local secrets file from the safe template
++# Windows PowerShell: Copy-Item .env.example .env
++# macOS/Linux: cp .env.example .env
++```
++
++Edit `.env` and add the values below:
++
++```dotenv
++DISCORD_TOKEN=your_real_bot_token_here
++OWNER_ID=your_discord_user_id
++# Optional: shows slash-command changes immediately in this test server
++GUILD_ID=your_test_server_id
++```
++
++> **Never commit or share `.env`, a bot token, API key, or a live player database.** If a Discord token is ever exposed, reset it in **Discord Developer Portal → Bot → Reset Token** immediately.
++
++In the Discord Developer Portal, enable the bot's **Message Content Intent** and **Server Members Intent**, then start it:
++
++```bash
++python bot.py
++```
++
++## Useful commands
++
++- `/pull` — summon heroes
++- `/heroes`, `/book`, `/profile`, `/inventory` — view progression
++- `/party view`, `/party set`, `/party clear` — manage the battle team
++- `/level` — play story chapters and battles
++- `/lab` — convert heroes to food and upgrade food
++- `/shop`, `/daily` — economy and daily tasks
++- `/admin ...` — owner-only administration commands; requires `OWNER_ID`
++
++## Content files
++
++- `heroes.csv` — hero roster, stats, skills, banners, and cooldowns
++- `story_chapters.csv` — story and chapter enemy/reward data
++- `Assets/` — card art, full art, banners, avatars, icons, and story images
++- `config.py` — shared battle and progression tuning values
++
++The bot synchronizes CSV-authored heroes and story chapters to the local SQLite database on startup.
++
++## Testing
++
++Run the regression tests with:
++
++```bash
++python -m unittest discover -s tests -v
++```
++
++For balance experimentation, `balance_tune.py` runs simulations against a throwaway database and writes `heroes_tuned.csv`; review that output before replacing `heroes.csv`.
++
++## Data and Git safety
++
++`gacha.db` is the live local SQLite database. It contains player IDs, display names, inventory, party, and progression, so it must stay local. It is ignored by `.gitignore` for new Git commits; do not upload it manually through the GitHub website either.
+diff --git a/bot.py b/bot.py
+index af08f28..04718b6 100644
+--- a/bot.py
++++ b/bot.py
+@@ -152,165 +152,219 @@ async def on_ready():
+ # Pull logic (shared by all pull buttons)
+ # ---------------------------------------------------------------------------
+ 
+-def do_one_pull(user_id: int, current_pity: int, pool: list, min_stars: int | None = None):
+-    """Pulls one warrior from the given pool (already filtered to a specific
+-    banner - see database.get_catalog_warriors_for_banner). min_stars forces
+-    the result to be at least that many stars (used for the 10x-pull 5★
+-    guarantee) - it never overrides the 6★ hard pity, which always wins."""
++def roll_one_pull(current_pity: int, pool: list, min_stars: int | None = None):
++    """Roll one result without writing to the database.
++
++    A whole summon batch is persisted together by ``database.apply_pull_batch``
++    after every result has been rolled. That is much faster than opening and
++    committing a new SQLite connection for each card in a 10-pull.
++    """
+     available_stars = {int(w.get("stars", 4)) for w in pool}
+     stars, pity_triggered = gacha.roll_stars_from_pool(current_pity, available_stars, min_stars=min_stars)
+     if stars is None:
+-        return None  # empty pool - shouldn't normally happen, caller checks first
+-
+-    new_pity = 0 if stars == 6 else current_pity + 1
++        return None
+ 
+     warrior = gacha.pick_warrior_by_stars(pool, stars)
+     if warrior is None:
+         return None
+ 
+-    outcome = database.add_warrior_to_user(user_id, warrior["warrior_id"])
+-
+     return {
+         "warrior": warrior,
+         "stars": stars,
+         "pity_triggered": pity_triggered,
+-        "outcome": outcome,
+-        "new_pity": new_pity,
++        "new_pity": 0 if stars == 6 else current_pity + 1,
+     }
+ 
+ 
+-def build_single_pull_embed(result: dict) -> discord.Embed:
++_PULL_LOCKS: dict[int, asyncio.Lock] = {}
++
++
++def _pull_lock(user_id: int) -> asyncio.Lock:
++    """One in-process lock per player prevents overlapping button clicks."""
++    lock = _PULL_LOCKS.get(user_id)
++    if lock is None:
++        lock = asyncio.Lock()
++        _PULL_LOCKS[user_id] = lock
++    return lock
++
++
++PULL_COLORS = {4: 0x93A4B8, 5: 0xD7A536, 6: 0xB989FF}
++PULL_EMOJI = {4: "◇", 5: "◆", 6: "✦"}
++
++
++def pity_status(pity: int) -> str:
++    """A concise, consistent pity label for every summon screen."""
++    pity = max(0, int(pity))
++    remaining = max(1, gacha.PITY_THRESHOLD - pity)
++    return f"Pity {pity}/{gacha.PITY_THRESHOLD}  ·  guaranteed 6★ in {remaining} pull{'s' if remaining != 1 else ''}"
++
++
++def build_single_pull_embed(result: dict, pity: int) -> discord.Embed:
+     warrior = result["warrior"]
+-    stars = result["stars"]
++    stars = int(result["stars"])
+     outcome = result["outcome"]
++    emoji = PULL_EMOJI.get(stars, "◇")
+ 
+     embed = discord.Embed(
+-        title=f"You pulled: {warrior['name']}",
+-        description=f"**Element:** {warrior['element']}\n**Stars:** {stars}★",
+-        color=discord.Color.gold() if stars == 6 else discord.Color.blue(),
++        title=f"{emoji} SUMMON COMPLETE  ·  {stars}★",
++        description=(
++            f"## {warrior['name']}\n"
++            f"{hero_text.element_icon(warrior['element'])} **{warrior['element']}**  ·  A new hero instance has been added to your collection."
++        ),
++        color=PULL_COLORS.get(stars, discord.Color.blurple().value),
+     )
+-
+-    if outcome["result"] == "new":
+-        embed.add_field(name="Result", value="New warrior added to your collection!", inline=False)
+-    elif outcome["result"] == "duplicate":
+-        embed.add_field(
+-            name="Result",
+-            value=(
+-                f"Duplicate copy obtained! This copy is stored for tier upgrades. "
+-                f"You now have **{outcome['duplicate_copies']}** copy/copies of this warrior."
+-            ),
+-            inline=False,
+-        )
+-
++    if outcome.get("result") == "duplicate":
++        embed.add_field(name="Collection", value="Duplicate copy stored for future star upgrades.", inline=False)
+     if result["pity_triggered"]:
+-        embed.set_footer(text="✨ Pity triggered — guaranteed 6★!")
+-
++        embed.add_field(name="Pity", value="✦ **6★ guarantee triggered**", inline=False)
++    embed.set_footer(text=pity_status(pity))
+     return embed
+ 
+ 
+-def build_multi_pull_embed(results: list, username: str) -> discord.Embed:
+-    lines = []
+-    star_emoji = {4: "⚪", 5: "🟠", 6: "🟡"}
+-    any_pity = False
+-    for r in results:
+-        stars = int(r.get("stars", 4))
+-        emoji = star_emoji.get(stars, "")
+-        tag = ""
+-        if r["pity_triggered"]:
+-            any_pity = True
+-        lines.append(f"{emoji} **{r['warrior']['name']}** — {stars}★{tag}")
++def build_multi_pull_embed(results: list, username: str, pity: int) -> discord.Embed:
++    buckets = {6: [], 5: [], 4: []}
++    pity_triggered = False
++    for result in results:
++        stars = int(result.get("stars", 4))
++        buckets.setdefault(stars, []).append(result["warrior"]["name"])
++        pity_triggered = pity_triggered or bool(result["pity_triggered"])
++
++    summary = []
++    for stars in (6, 5, 4):
++        names = buckets.get(stars, [])
++        if names:
++            summary.append(f"{PULL_EMOJI[stars]} **{stars}★**  " + " · ".join(f"`{name}`" for name in names))
+ 
+     embed = discord.Embed(
+-        title=f"{username}'s 10x Pull Results",
+-        description="\n".join(lines),
+-        color=discord.Color.gold(),
++        title="10 SUMMONS COMPLETE",
++        description=f"**{username}**, your results are in.\n\n" + "\n".join(summary),
++        color=PULL_COLORS[6] if buckets[6] else PULL_COLORS[5] if buckets[5] else PULL_COLORS[4],
+     )
+-    if any_pity:
+-        embed.set_footer(text="✨ Pity triggered during this batch!")
++    if pity_triggered:
++        embed.add_field(name="Pity", value="✦ **6★ guarantee triggered during this batch**", inline=False)
++    embed.set_footer(text=pity_status(pity))
+     return embed
+ 
+ 
+ async def execute_pull(interaction: discord.Interaction, count: int, banner_id: str):
+-    """Runs the actual pull(s) and sends the result as a follow-up message.
+-    Assumes the interaction has already been responded to or deferred by the caller."""
+-    pool = database.get_catalog_warriors_for_banner(banner_id, default_banner_id=DEFAULT_BANNER_ID)
+-    if not pool:
+-        await interaction.followup.send(
+-            "This banner doesn't have any heroes assigned to it yet.", ephemeral=True
++    """Run a summon with responsive UI and one atomic database write."""
++    user_id = interaction.user.id
++    async with _pull_lock(user_id):
++        # Database calls are synchronous SQLite operations. Keep them in a
++        # worker thread so a busy 10-pull never freezes unrelated commands.
++        pool = await asyncio.to_thread(
++            database.get_catalog_warriors_for_banner,
++            banner_id,
++            DEFAULT_BANNER_ID,
+         )
+-        return
+-
+-    user = database.get_or_create_user(interaction.user.id, str(interaction.user.display_name))
++        if not pool:
++            await interaction.followup.send(
++                "This banner doesn't have any heroes assigned to it yet.", ephemeral=True
++            )
++            return
+ 
+-    if user["summon_charms"] < count:
+-        await interaction.followup.send(
+-            f"You need {count} Summon Charm(s) but only have {user['summon_charms']}. "
+-            f"You have {user['solite']} Solite — buy more Charms with `/shop`.",
+-            ephemeral=True,
++        user = await asyncio.to_thread(
++            database.get_or_create_user,
++            user_id,
++            str(interaction.user.display_name),
+         )
+-        return
+-
+-    database.update_user_field(interaction.user.id, "summon_charms", user["summon_charms"] - count)
+-
+-    pity = user["pity_counter"]
+-    results = []
+-    got_five_plus = False
+-    for i in range(count):
+-        # 10x pulls are guaranteed at least one 5★ (or better) - if the first
+-        # 9 didn't produce one, the 10th is forced to. The 6★ hard pity (see
+-        # PITY_THRESHOLD) still takes priority over this whenever it's due.
+-        force_five = count == 10 and i == count - 1 and not got_five_plus
+-        result = do_one_pull(interaction.user.id, pity, pool, min_stars=5 if force_five else None)
+-        if result is None:
+-            continue
+-        if result["stars"] >= 5:
+-            got_five_plus = True
+-        pity = result["new_pity"]
+-        results.append(result)
+-
+-    database.update_user_field(interaction.user.id, "pity_counter", pity)
+-    track_progress(interaction.user.id, "pull_total", amount=len(results))
++        if int(user["summon_charms"]) < count:
++            await interaction.followup.send(
++                f"You need {count} Summon Charm(s) but only have {user['summon_charms']}. "
++                f"You have {user['solite']} Solite — buy more Charms with `/shop`.",
++                ephemeral=True,
++            )
++            return
+ 
+-    if not results:
+-        await interaction.followup.send("Something went wrong finding warriors — try again.")
+-        return
++        starting_pity = int(user["pity_counter"])
++        pity = starting_pity
++        results = []
++        got_five_plus = False
++        for i in range(count):
++            # A 10-pull guarantees one 5★ or better. A due 6★ pity still
++            # takes precedence over that floor.
++            force_five = count == 10 and i == count - 1 and not got_five_plus
++            result = roll_one_pull(pity, pool, min_stars=5 if force_five else None)
++            if result is None:
++                await interaction.followup.send("Something went wrong finding warriors — try again.", ephemeral=True)
++                return
++            if result["stars"] >= 5:
++                got_five_plus = True
++            pity = result["new_pity"]
++            results.append(result)
++
++        applied = await asyncio.to_thread(
++            database.apply_pull_batch,
++            user_id,
++            starting_pity,
++            [result["warrior"]["warrior_id"] for result in results],
++            count,
++            pity,
++            today_str(),
++        )
++        if not applied.get("ok"):
++            if applied.get("reason") == "not_enough_charms":
++                message = "Your Summon Charm balance changed before this pull completed. Please try again."
++            elif applied.get("reason") == "state_changed":
++                message = "Your summon state changed while this was processing. Please pull again."
++            else:
++                message = "The summon could not be completed. No Charms were spent — please try again."
++            await interaction.followup.send(message, ephemeral=True)
++            return
+ 
+-    if count == 1:
+-        embed = build_single_pull_embed(results[0])
+-        card_buffer = await asyncio.to_thread(card_art.build_character_card, {
+-            **results[0]["warrior"],
+-            "stars": int(results[0]["stars"]),
+-            "level": 1,
+-        })
+-        file = discord.File(card_buffer, filename="character_card.png")
+-        embed.set_image(url="attachment://character_card.png")
+-        await interaction.followup.send(embed=embed, file=file, view=PullAgainView(last_count=count, banner_id=banner_id))
+-    else:
+-        embed = build_multi_pull_embed(results, str(interaction.user.display_name))
+-        collage_buffer = await asyncio.to_thread(card_art.build_pull_grid, results)
+-        file = discord.File(collage_buffer, filename="pull_results.png")
+-        embed.set_image(url="attachment://pull_results.png")
+-        await interaction.followup.send(embed=embed, file=file, view=PullAgainView(last_count=count, banner_id=banner_id))
++        for result, outcome in zip(results, applied["outcomes"]):
++            result["outcome"] = outcome
++
++        # Publish a lightweight status message before CPU-heavy art rendering.
++        # This makes a pull feel instant even when a card needs its first render.
++        result_message = await interaction.followup.send("✨ **Summoning…**", wait=True)
++        if count == 1:
++            embed = build_single_pull_embed(results[0], pity)
++            card_buffer = await asyncio.to_thread(card_art.build_character_card, {
++                **results[0]["warrior"],
++                "stars": int(results[0]["stars"]),
++                "level": 1,
++            })
++            file = discord.File(card_buffer, filename="character_card.png")
++            embed.set_image(url="attachment://character_card.png")
++            await result_message.edit(content=None, embed=embed, attachments=[file], view=PullAgainView(user_id, last_count=count, banner_id=banner_id))
++        else:
++            embed = build_multi_pull_embed(results, str(interaction.user.display_name), pity)
++            # A compact art collage is far quicker than rendering ten full-size
++            # cards, while the embed still lists every result and rarity.
++            collage_buffer = await asyncio.to_thread(warrior_art.build_collage, results)
++            file = discord.File(collage_buffer, filename="pull_results.png")
++            embed.set_image(url="attachment://pull_results.png")
++            await result_message.edit(content=None, embed=embed, attachments=[file], view=PullAgainView(user_id, last_count=count, banner_id=banner_id))
+ 
+ 
+ class PullAgainView(discord.ui.View):
+-    """Shown under every pull RESULT message so you can immediately pull again
+-    without scrolling back up to the banner menu. Remembers which banner this
+-    result came from, so "pull again" keeps pulling from the same pool."""
++    """Owner-only quick actions below a completed summon."""
+ 
+-    def __init__(self, last_count: int, banner_id: str):
++    def __init__(self, user_id: int, last_count: int, banner_id: str):
+         super().__init__(timeout=300)
++        self.user_id = user_id
+         self.last_count = last_count
+         self.banner_id = banner_id
+ 
+-    @discord.ui.button(label="Pull Again x1", style=discord.ButtonStyle.primary, emoji="✨")
++    async def _guard(self, interaction: discord.Interaction) -> bool:
++        if interaction.user.id != self.user_id:
++            await interaction.response.send_message("This summon belongs to another player.", ephemeral=True)
++            return False
++        return True
++
++    @discord.ui.button(label="Summon ×1", style=discord.ButtonStyle.primary, emoji="✨")
+     async def pull_again_one(self, interaction: discord.Interaction, button: discord.ui.Button):
+-        await interaction.response.defer()
++        if not await self._guard(interaction):
++            return
++        await interaction.response.defer(thinking=True)
+         await execute_pull(interaction, count=1, banner_id=self.banner_id)
+ 
+-    @discord.ui.button(label="Pull Again x10", style=discord.ButtonStyle.success, emoji="🎉")
++    @discord.ui.button(label="Summon ×10", style=discord.ButtonStyle.success, emoji="🎉")
+     async def pull_again_ten(self, interaction: discord.Interaction, button: discord.ui.Button):
+-        await interaction.response.defer()
++        if not await self._guard(interaction):
++            return
++        await interaction.response.defer(thinking=True)
+         await execute_pull(interaction, count=10, banner_id=self.banner_id)
+ 
+ 
+@@ -318,113 +372,165 @@ class PullAgainView(discord.ui.View):
+ # Pull menu UI: /pull opens this menu, all pulling happens via its buttons
+ # ---------------------------------------------------------------------------
+ 
+-def build_roster_embed(banner_id: str, banner_name: str) -> discord.Embed:
+-    pool = database.get_catalog_warriors_for_banner(banner_id, default_banner_id=DEFAULT_BANNER_ID)
+-    embed = discord.Embed(title=f"{banner_name} — Roster", color=discord.Color.blurple())
+-
++def build_roster_embed(banner: dict, pool: list[dict]) -> discord.Embed:
++    """A compact, readable roster instead of a long unstructured name list."""
++    embed = discord.Embed(
++        title=f"{banner['name'].upper()}  ·  ROSTER",
++        color=discord.Color.dark_teal(),
++    )
+     if not pool:
+-        embed.description = "No heroes assigned to this banner yet."
++        embed.description = "No heroes are assigned to this banner yet."
+         return embed
+ 
+-    pool.sort(key=lambda w: (int(w.get("stars", 4)), w["name"]), reverse=True)
+-    lines = [f"**{w['name']}** ({w['element']})" for w in pool]
+-    # Discord embed descriptions cap at 4096 chars; fields cap at 1024 - chunk if needed
+-    description = "\n".join(lines)
+-    if len(description) <= 4096:
+-        embed.description = description
+-    else:
+-        embed.description = f"{len(pool)} heroes in this pool (too many to list here)."
++    for stars in (6, 5, 4):
++        heroes = [hero for hero in pool if int(hero.get("stars", 4)) == stars]
++        if not heroes:
++            continue
++        heroes.sort(key=lambda hero: (str(hero["element"]), str(hero["name"])))
++        entries = [f"{hero_text.element_icon(hero['element'])} {hero['name']}" for hero in heroes]
++        embed.add_field(
++            name=f"{PULL_EMOJI[stars]} {stars}★ heroes  ·  {len(entries)}",
++            value="  ·  ".join(entries)[:1024],
++            inline=False,
++        )
++    embed.set_footer(text=f"{len(pool)} heroes in this banner")
++    return embed
++
++
++def build_banner_detail_embed(banner: dict, user: dict, pool: list[dict]) -> discord.Embed:
++    """Minimal banner screen with the information a player needs before pulling."""
++    pity = int(user["pity_counter"])
++    embed = discord.Embed(
++        title=f"SUMMON  //  {banner['name'].upper()}",
++        description=banner["description"],
++        color=discord.Color.dark_teal(),
++    )
++    embed.add_field(
++        name="Your balance",
++        value=f"🎟️ **{int(user['summon_charms']):,}** Summon Charms\n{pity_status(pity)}",
++        inline=False,
++    )
++    embed.add_field(
++        name="Rates",
++        value="◇ 4★  **97%**   ·   ◆ 5★  **2%**   ·   ✦ 6★  **1%**",
++        inline=False,
++    )
++    embed.add_field(
++        name="Banner pool",
++        value=f"**{len(pool)}** heroes available  ·  A ×10 summon guarantees at least one **5★** or higher.",
++        inline=False,
++    )
++    embed.set_footer(text="Choose a summon option below")
+     return embed
+ 
+ 
+ class PullMenuView(discord.ui.View):
+-    """The banner's pull menu - shown after picking a banner. Stays active so
+-    you can keep pulling from the same menu message."""
++    """An owner-only, compact control surface for one selected banner."""
+ 
+-    def __init__(self, banner_id: str):
++    def __init__(self, user_id: int, banner_id: str):
+         super().__init__(timeout=300)
++        self.user_id = user_id
+         self.banner_id = banner_id
+ 
+-    @discord.ui.button(label="Pull x1", style=discord.ButtonStyle.primary, emoji="✨")
++    async def _guard(self, interaction: discord.Interaction) -> bool:
++        if interaction.user.id != self.user_id:
++            await interaction.response.send_message("This summon menu belongs to another player.", ephemeral=True)
++            return False
++        return True
++
++    @discord.ui.button(label="Summon ×1", style=discord.ButtonStyle.primary, emoji="✨")
+     async def pull_once(self, interaction: discord.Interaction, button: discord.ui.Button):
+-        await interaction.response.defer()
++        if not await self._guard(interaction):
++            return
++        await interaction.response.defer(thinking=True)
+         await execute_pull(interaction, count=1, banner_id=self.banner_id)
+ 
+-    @discord.ui.button(label="Pull x10", style=discord.ButtonStyle.success, emoji="🎉")
++    @discord.ui.button(label="Summon ×10", style=discord.ButtonStyle.success, emoji="🎉")
+     async def pull_ten(self, interaction: discord.Interaction, button: discord.ui.Button):
+-        await interaction.response.defer()
++        if not await self._guard(interaction):
++            return
++        await interaction.response.defer(thinking=True)
+         await execute_pull(interaction, count=10, banner_id=self.banner_id)
+ 
+-    @discord.ui.button(label="View Roster", style=discord.ButtonStyle.secondary, emoji="📋")
++    @discord.ui.button(label="Roster", style=discord.ButtonStyle.secondary, emoji="📋")
+     async def view_roster(self, interaction: discord.Interaction, button: discord.ui.Button):
+-        banner = next((b for b in BANNERS if b["id"] == self.banner_id), None)
+-        banner_name = banner["name"] if banner else self.banner_id
+-        embed = build_roster_embed(self.banner_id, banner_name)
+-        await interaction.response.send_message(embed=embed, ephemeral=True)
++        if not await self._guard(interaction):
++            return
++        await interaction.response.defer(ephemeral=True, thinking=True)
++        banner = next((entry for entry in BANNERS if entry["id"] == self.banner_id), None)
++        if banner is None:
++            await interaction.followup.send("This banner is no longer available.", ephemeral=True)
++            return
++        pool = await asyncio.to_thread(database.get_catalog_warriors_for_banner, self.banner_id, DEFAULT_BANNER_ID)
++        await interaction.followup.send(embed=build_roster_embed(banner, pool), ephemeral=True)
+ 
+-    @discord.ui.button(label="Back to Banners", style=discord.ButtonStyle.secondary, emoji="↩️")
++    @discord.ui.button(label="All banners", style=discord.ButtonStyle.secondary, emoji="‹")
+     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+-        embed = build_banner_select_embed()
+-        await interaction.response.edit_message(embed=embed, attachments=[], view=BannerSelectView())
++        if not await self._guard(interaction):
++            return
++        await interaction.response.defer()
++        user = await asyncio.to_thread(database.get_or_create_user, self.user_id, str(interaction.user.display_name))
++        embed = build_banner_select_embed(user)
++        await interaction.edit_original_response(embed=embed, attachments=[], view=BannerSelectView(self.user_id))
+ 
+ 
+ class BannerSelectView(discord.ui.View):
+-    """The initial /pull menu - choose which banner to pull from."""
++    """Private banner selector shown by /pull."""
+ 
+-    def __init__(self):
++    def __init__(self, user_id: int):
+         super().__init__(timeout=300)
++        self.user_id = user_id
+         for banner in BANNERS:
+-            self.add_item(BannerButton(banner))
++            self.add_item(BannerButton(user_id, banner))
+ 
+ 
+ class BannerButton(discord.ui.Button):
+-    def __init__(self, banner: dict):
++    def __init__(self, user_id: int, banner: dict):
+         super().__init__(label=banner["name"], style=discord.ButtonStyle.primary, emoji="🔮")
++        self.user_id = user_id
+         self.banner = banner
++
+     async def callback(self, interaction: discord.Interaction):
++        if interaction.user.id != self.user_id:
++            await interaction.response.send_message("This summon menu belongs to another player.", ephemeral=True)
++            return
+         await interaction.response.defer()
+-
+-        database.get_or_create_user(
+-            interaction.user.id,
+-            str(interaction.user.display_name)
+-        )
+-
+-        embed = discord.Embed(
+-            title=self.banner["name"],
+-            description=self.banner["description"],
+-            color=discord.Color.purple(),
+-        )
+-
+-        embed.set_footer(text="Choose how many pulls to make below")
++        user_task = asyncio.to_thread(database.get_or_create_user, self.user_id, str(interaction.user.display_name))
++        pool_task = asyncio.to_thread(database.get_catalog_warriors_for_banner, self.banner["id"], DEFAULT_BANNER_ID)
++        user, pool = await asyncio.gather(user_task, pool_task)
++        embed = build_banner_detail_embed(self.banner, user, pool)
+ 
+         image_path = warrior_art.get_banner_image_path(self.banner["id"])
+-
+         if image_path:
+             optimized = await asyncio.to_thread(warrior_art.load_optimized_bytes, image_path)
+             file = discord.File(optimized, filename="banner.png")
+             embed.set_image(url="attachment://banner.png")
+-
+             await interaction.edit_original_response(
+                 embed=embed,
+                 attachments=[file],
+-                view=PullMenuView(self.banner["id"])
++                view=PullMenuView(self.user_id, self.banner["id"]),
+             )
+         else:
+             await interaction.edit_original_response(
+                 embed=embed,
+                 attachments=[],
+-                view=PullMenuView(self.banner["id"])
++                view=PullMenuView(self.user_id, self.banner["id"]),
+             )
+-        
+-                 
+-def build_banner_select_embed() -> discord.Embed:
++
++
++def build_banner_select_embed(user: dict) -> discord.Embed:
+     embed = discord.Embed(
+-        title="Choose a Banner",
+-        description="Select a banner below to view details and start pulling.",
+-        color=discord.Color.purple(),
++        title="SUMMON  //  BANNERS",
++        description=(
++            f"🎟️ **{int(user['summon_charms']):,}** Summon Charms available\n"
++            f"{pity_status(int(user['pity_counter']))}\n\n"
++            "Select a banner to view its roster and summon options."
++        ),
++        color=discord.Color.dark_teal(),
+     )
+     for banner in BANNERS:
+-        embed.add_field(name=banner["name"], value=banner["description"], inline=False)
++        embed.add_field(name=banner["name"], value=banner["description"][:180], inline=True)
++    embed.set_footer(text="Summons are private to the player who opened this panel")
+     return embed
+ 
+ 
+@@ -439,10 +545,11 @@ async def ping(interaction: discord.Interaction):
+ 
+ @bot.tree.command(name="pull", description="Open the summon menu to pull warriors")
+ async def pull(interaction: discord.Interaction):
+-    database.get_or_create_user(interaction.user.id, str(interaction.user.display_name))
+-    track_progress(interaction.user.id, "pull_menu_open")
+-    embed = build_banner_select_embed()
+-    await interaction.response.send_message(embed=embed, view=BannerSelectView())
++    await interaction.response.defer()
++    user = await asyncio.to_thread(database.get_or_create_user, interaction.user.id, str(interaction.user.display_name))
++    await asyncio.to_thread(track_progress, interaction.user.id, "pull_menu_open")
++    embed = build_banner_select_embed(user)
++    await interaction.followup.send(embed=embed, view=BannerSelectView(interaction.user.id))
+ 
+ 
+ class ItemInventoryView(discord.ui.View):
+@@ -572,14 +679,21 @@ async def inventory(interaction: discord.Interaction):
+ 
+ @bot.tree.command(name="heroes", description="Browse your owned heroes")
+ async def heroes(interaction: discord.Interaction):
+-    database.get_or_create_user(interaction.user.id, str(interaction.user.display_name))
+-    warriors = database.get_user_warriors(interaction.user.id)
++    # Acknowledge at once, then do SQLite and the first card render without
++    # blocking the event loop. This removes the common "bot is thinking" pause
++    # when a player opens a large collection.
++    await interaction.response.defer()
+ 
++    def load_hero_screen():
++        database.get_or_create_user(interaction.user.id, str(interaction.user.display_name))
++        return database.get_user_warriors(interaction.user.id), database.get_party(interaction.user.id)
++
++    warriors, party = await asyncio.to_thread(load_hero_screen)
+     if not warriors:
+-        await interaction.response.send_message("You don't own any heroes yet — try `/pull`!", ephemeral=True)
++        await interaction.followup.send("You don't own any heroes yet — try `/pull`!", ephemeral=True)
+         return
+ 
+-    view = HeroInventoryView(interaction.user.id, sort_warriors(warriors), index=0)
++    view = HeroInventoryView(interaction.user.id, sort_warriors(warriors), party=party, index=0)
+     await view.send_initial(interaction)
+ 
+ 
+@@ -1807,7 +1921,12 @@ async def party_set(interaction: discord.Interaction, position: app_commands.Cho
+         return
+ 
+     warrior = matches[0]
+-    database.set_party_slot(interaction.user.id, position.value, warrior["id"])
++    if not database.set_party_slot(interaction.user.id, position.value, warrior["id"]):
++        await interaction.response.send_message(
++            "That warrior is no longer in your collection. Refresh `/party view` and try again.",
++            ephemeral=True,
++        )
++        return
+     track_progress(interaction.user.id, "set_party")
+ 
+     await send_party_response(interaction, content=f"Placed **{warrior['name']}** in Slot {position.value}.")
+@@ -2346,6 +2465,7 @@ class MultiLevelUpModal(discord.ui.Modal, title="Level Up Multiple Times"):
+ # ---------------------------------------------------------------------------
+ 
+ _CARD_CACHE: dict = {}
++_CARD_INFLIGHT: dict = {}
+ _CARD_CACHE_MAX = 96
+ 
+ 
+@@ -2354,16 +2474,28 @@ def _card_key(w: dict):
+ 
+ 
+ async def get_card_bytes(warrior: dict) -> bytes:
+-    """Character card PNG bytes, cached so flipping between heroes/tabs is instant."""
++    """Return card PNG bytes without rendering the same card twice concurrently."""
+     key = _card_key(warrior)
+-    data = _CARD_CACHE.get(key)
+-    if data is None:
+-        buffer = await asyncio.to_thread(card_art.build_character_card, warrior)
++    cached = _CARD_CACHE.get(key)
++    if cached is not None:
++        return cached
++
++    task = _CARD_INFLIGHT.get(key)
++    if task is None:
++        # Several rapid page taps can otherwise start several Pillow renders of
++        # the same card. One shared task keeps navigation responsive.
++        task = asyncio.create_task(asyncio.to_thread(card_art.build_character_card, dict(warrior)))
++        _CARD_INFLIGHT[key] = task
++    try:
++        buffer = await asyncio.shield(task)
+         data = buffer.getvalue()
+         if len(_CARD_CACHE) >= _CARD_CACHE_MAX:
+             _CARD_CACHE.pop(next(iter(_CARD_CACHE)))
+         _CARD_CACHE[key] = data
+-    return data
++        return data
++    finally:
++        if task.done():
++            _CARD_INFLIGHT.pop(key, None)
+ 
+ 
+ async def get_card_file(warrior: dict) -> discord.File:
+@@ -2401,18 +2533,18 @@ def build_hero_overview_embed(warrior: dict, index: int, total: int, party_slot,
+         lines.append(f"📚 Copy {copy_no} of {copy_total} you own")
+ 
+     embed = discord.Embed(
+-        title=warrior["name"],
++        title=f"HERO  //  {warrior['name'].upper()}",
+         description="\n".join(lines),
+         color=discord.Color(hero_text.element_color(warrior["element"])),
+     )
+-    embed.add_field(name="Stats (at current level & stars)", value=hero_text.stat_block(stats), inline=False)
+-    embed.set_footer(text=f"Hero {index + 1} of {total}  ·  tap Skills or Upgrade above")
++    embed.add_field(name="CURRENT STATS", value=hero_text.stat_block(stats), inline=False)
++    embed.set_footer(text=f"{index + 1:02}/{total:02}  ·  use the tabs below to view abilities and growth")
+     return embed
+ 
+ 
+ def build_hero_skills_embed(warrior: dict, index: int, total: int) -> discord.Embed:
+     embed = discord.Embed(
+-        title=f"{warrior['name']} — Skills",
++        title=f"HERO  //  {warrior['name'].upper()}  //  ABILITIES",
+         description=hero_text.rotation_text(),
+         color=discord.Color(hero_text.element_color(warrior["element"])),
+     )
+@@ -2441,7 +2573,7 @@ def build_hero_upgrade_embed(warrior: dict, user: dict, star_status: dict, index
+     exp = int(user["exp"])
+ 
+     embed = discord.Embed(
+-        title=f"{warrior['name']} — Upgrade",
++        title=f"HERO  //  {warrior['name'].upper()}  //  GROWTH",
+         color=discord.Color(hero_text.element_color(warrior["element"])),
+     )
+ 
+@@ -2537,7 +2669,7 @@ class _HeroButton(discord.ui.Button):
+ 
+ 
+ class HeroInventoryView(discord.ui.View):
+-    def __init__(self, user_id: int, warriors: list, index: int = 0, tab: str = "overview"):
++    def __init__(self, user_id: int, warriors: list, party: dict | None = None, index: int = 0, tab: str = "overview"):
+         super().__init__(timeout=300)
+         self.user_id = user_id
+         self.warriors = warriors
+@@ -2545,6 +2677,10 @@ class HeroInventoryView(discord.ui.View):
+         self.tab = tab
+         self.message = None
+         self.star_status: dict = {}
++        self.party_slots = {
++            int(warrior["user_warrior_id"]): int(position)
++            for position, warrior in (party or {}).items()
++        }
+         self._shown_key = None  # which card image is currently attached to the message
+         self._bg = None         # background prefetch task
+ 
+@@ -2577,11 +2713,11 @@ class HeroInventoryView(discord.ui.View):
+     def _rebuild(self, user: dict, warrior: dict):
+         self.clear_items()
+         tab_style = lambda name: discord.ButtonStyle.primary if self.tab == name else discord.ButtonStyle.secondary
+-        self.add_item(_HeroButton(self, "prev", label="◀", row=0))
+-        self.add_item(_HeroButton(self, "overview", label="Overview", emoji="📋", style=tab_style("overview"), row=0))
+-        self.add_item(_HeroButton(self, "skills", label="Skills", emoji="⚔️", style=tab_style("skills"), row=0))
+-        self.add_item(_HeroButton(self, "upgrade", label="Upgrade", emoji="⬆️", style=tab_style("upgrade"), row=0))
+-        self.add_item(_HeroButton(self, "next", label="▶", row=0))
++        self.add_item(_HeroButton(self, "prev", label="‹", row=0))
++        self.add_item(_HeroButton(self, "overview", label="Summary", emoji="◈", style=tab_style("overview"), row=0))
++        self.add_item(_HeroButton(self, "skills", label="Abilities", emoji="⚔", style=tab_style("skills"), row=0))
++        self.add_item(_HeroButton(self, "upgrade", label="Growth", emoji="↑", style=tab_style("upgrade"), row=0))
++        self.add_item(_HeroButton(self, "next", label="›", row=0))
+         self.add_item(HeroJumpSelect(self))
+ 
+         if self.tab == "upgrade":
+@@ -2610,20 +2746,18 @@ class HeroInventoryView(discord.ui.View):
+             ))
+ 
+     def _gather(self, warrior: dict) -> dict:
+-        """All the blocking DB work for one render; runs in a worker thread so the bot stays responsive."""
+-        data = {"user": database.get_or_create_user(self.user_id, "")}
++        """Fetch only data the current tab needs, outside Discord's event loop."""
++        data = {}
+         if self.tab == "upgrade":
++            data["user"] = database.get_or_create_user(self.user_id, "")
+             data["star_status"] = self._load_star_status(warrior)
+-        elif self.tab == "overview":
+-            party = database.get_party(self.user_id)
+-            data["slot"] = next((pos for pos, w in party.items() if w.get("user_warrior_id") == warrior["id"]), None)
+         return data
+ 
+     async def _build_message(self):
+         warrior = self.warriors[self.index]
+         total = len(self.warriors)
+         data = await asyncio.to_thread(self._gather, warrior)
+-        user = data["user"]
++        user = data.get("user", {})
+ 
+         if self.tab == "skills":
+             embed = build_hero_skills_embed(warrior, self.index, total)
+@@ -2633,7 +2767,14 @@ class HeroInventoryView(discord.ui.View):
+         else:
+             same = [w for w in self.warriors if w["warrior_id"] == warrior["warrior_id"]]
+             copy_no = next((n for n, w in enumerate(same, 1) if w["id"] == warrior["id"]), 1)
+-            embed = build_hero_overview_embed(warrior, self.index, total, data["slot"], copy_no, len(same))
++            embed = build_hero_overview_embed(
++                warrior,
++                self.index,
++                total,
++                self.party_slots.get(int(warrior["id"])),
++                copy_no,
++                len(same),
++            )
+ 
+         # Only touch the attachment when the picture actually has to change.
+         # The Upgrade tab shows no card, so level/star spam never builds or uploads an image.
+@@ -2664,7 +2805,8 @@ class HeroInventoryView(discord.ui.View):
+                 pass
+ 
+     async def send_initial(self, interaction: discord.Interaction):
+-        await interaction.response.defer()
++        if not interaction.response.is_done():
++            await interaction.response.defer()
+         await self._edit(interaction, initial=True)
+ 
+     async def _edit(self, interaction: discord.Interaction, initial: bool = False):
+@@ -2673,7 +2815,10 @@ class HeroInventoryView(discord.ui.View):
+             self.message = await interaction.followup.send(embed=embed, files=changes.get("attachments", []), view=self)
+         else:
+             await interaction.edit_original_response(embed=embed, view=self, **changes)
+-        if self.tab != "upgrade":
++        # Keep at most one low-priority prefetch running. Rapid arrow clicks
++        # used to queue multiple duplicate Pillow jobs and make /heroes feel
++        # progressively slower.
++        if self.tab != "upgrade" and (self._bg is None or self._bg.done()):
+             self._bg = asyncio.create_task(self._prefetch())
+ 
+     async def _edit_message_after_modal(self, interaction: discord.Interaction):
+@@ -2687,6 +2832,8 @@ class HeroInventoryView(discord.ui.View):
+                 pass
+ 
+     async def on_timeout(self):
++        if self._bg is not None and not self._bg.done():
++            self._bg.cancel()
+         for child in self.children:
+             child.disabled = True
+         if self.message is not None:
+@@ -3034,7 +3181,12 @@ class EditWarriorSelect(discord.ui.Select):
+             await interaction.response.send_message("This isn't your party panel.", ephemeral=True)
+             return
+         user_warrior_id = int(self.values[0])
+-        database.set_party_slot(self.user_id, self.position, user_warrior_id)
++        if not database.set_party_slot(self.user_id, self.position, user_warrior_id):
++            await interaction.response.send_message(
++                "That warrior is no longer in your collection. Reopen `/level` and try again.",
++                ephemeral=True,
++            )
++            return
+ 
+         chapter = database.get_story_chapter(self.chapter_number)
+         embed = build_party_panel_embed(self.user_id, chapter)
+diff --git a/card_art.py b/card_art.py
+index 3d80ddc..ed47b6c 100644
+--- a/card_art.py
++++ b/card_art.py
+@@ -1,12 +1,19 @@
+ import os
+-from io import BytesIO
+ from functools import lru_cache
++from io import BytesIO
+ from typing import Optional
+ 
+-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
++from PIL import Image, ImageDraw, ImageFont
+ 
+ BASE_DIR = os.path.dirname(__file__)
+-CARD_ASSETS_DIR = os.path.join(BASE_DIR, "assets", "cards")
++# Prefer the repository's `Assets/` directory, with a lowercase fallback for
++# existing installations. This matters on Linux hosts, where `Assets` and
++# `assets` are different paths.
++ASSETS_ROOT = next(
++    (path for path in (os.path.join(BASE_DIR, "Assets"), os.path.join(BASE_DIR, "assets")) if os.path.isdir(path)),
++    os.path.join(BASE_DIR, "Assets"),
++)
++CARD_ASSETS_DIR = os.path.join(ASSETS_ROOT, "cards")
+ FRAMES_DIR = os.path.join(CARD_ASSETS_DIR, "frames")
+ STARS_DIR = os.path.join(CARD_ASSETS_DIR, "stars")
+ ELEMENTS_DIR = os.path.join(CARD_ASSETS_DIR, "elements")
+@@ -61,20 +68,30 @@ _FONT_CANDIDATES = {
+ }
+ 
+ 
++@lru_cache(maxsize=32)
+ def _font(kind: str, size: int):
++    """Load each typeface once instead of reopening a font per card layer."""
+     for candidate in _FONT_CANDIDATES[kind]:
+         if os.path.exists(candidate):
+             return ImageFont.truetype(candidate, size=size)
+     return ImageFont.load_default()
+ 
+ 
+-def _asset(path: str) -> Optional[Image.Image]:
+-    if not os.path.exists(path):
+-        return None
++@lru_cache(maxsize=256)
++def _cached_asset(path: str, modified_time: float) -> Optional[Image.Image]:
++    """Decode a static art asset once; callers receive a safe copy below."""
+     try:
+-        return Image.open(path).convert("RGBA")
+-    except Exception:
++        with Image.open(path) as source:
++            return source.convert("RGBA")
++    except (OSError, ValueError):
++        return None
++
++
++def _asset(path: str) -> Optional[Image.Image]:
++    if not path or not os.path.exists(path):
+         return None
++    image = _cached_asset(path, os.path.getmtime(path))
++    return image.copy() if image is not None else None
+ 
+ 
+ def _fit_cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+@@ -127,6 +144,12 @@ def _star_info(stars: int) -> tuple[str, int]:
+ 
+ 
+ def _star_row(stars: int, icon_size: int = 20) -> Image.Image:
++    """Return a copy of a cached star row for the requested tier."""
++    return _cached_star_row(int(stars), int(icon_size)).copy()
++
++
++@lru_cache(maxsize=32)
++def _cached_star_row(stars: int, icon_size: int) -> Image.Image:
+     frame_family, progression_count = _star_info(stars)
+     row = Image.new("RGBA", (250, 30), (0, 0, 0, 0))
+ 
+@@ -164,7 +187,13 @@ def _star_row(stars: int, icon_size: int = 20) -> Image.Image:
+ 
+ 
+ def _element_icon(element: str, size: int = 31) -> Optional[Image.Image]:
+-    filename = ELEMENT_ICON_IDS.get(str(element), "")
++    icon = _cached_element_icon(str(element), int(size))
++    return icon.copy() if icon is not None else None
++
++
++@lru_cache(maxsize=32)
++def _cached_element_icon(element: str, size: int) -> Optional[Image.Image]:
++    filename = ELEMENT_ICON_IDS.get(element, "")
+     path = os.path.join(ELEMENTS_DIR, filename) if filename else ""
+     icon = _asset(path) if path else None
+     if icon is None:
+@@ -250,7 +279,9 @@ def build_character_card(warrior: dict, stars: Optional[int] = None, level: Opti
+     _draw_centered(draw, (133, 505, 257, 552), element.upper(), _font("sans_bold", 16), (246, 242, 236, 255))
+ 
+     buffer = BytesIO()
+-    canvas.save(buffer, format="PNG", optimize=True)
++    # Discord does not benefit enough from PNG's slow optimization pass to
++    # justify delaying an interaction on every newly viewed hero.
++    canvas.save(buffer, format="PNG", compress_level=6)
+     buffer.seek(0)
+     return buffer
+ 
+diff --git a/database.py b/database.py
+index cac8934..77b6f0f 100644
+--- a/database.py
++++ b/database.py
+@@ -473,6 +473,103 @@ def add_warrior_to_user(user_id: int, warrior_id: int):
+         "base_stars": base_stars,
+     }
+ 
++def apply_pull_batch(
++    user_id: int,
++    expected_pity: int,
++    warrior_ids: list[int],
++    charm_cost: int,
++    new_pity: int,
++    progress_date: str | None = None,
++):
++    """Apply a completed summon batch as one all-or-nothing SQLite transaction.
++
++    The caller rolls the random results first, then passes their catalog IDs
++    here.  This function deducts charms, creates all owned instances, updates
++    pity, and records pull-task progress in one commit.  A failed 10-pull can
++    therefore never charge a player for only some of its heroes.
++    """
++    warrior_ids = [int(warrior_id) for warrior_id in warrior_ids]
++    charm_cost = int(charm_cost)
++    expected_pity = int(expected_pity)
++    new_pity = int(new_pity)
++    if not warrior_ids or charm_cost != len(warrior_ids) or charm_cost <= 0:
++        return {"ok": False, "reason": "invalid_batch"}
++
++    conn = get_connection()
++    cur = conn.cursor()
++    try:
++        cur.execute("BEGIN IMMEDIATE")
++        user = cur.execute(
++            "SELECT summon_charms, pity_counter FROM users WHERE user_id = ?",
++            (user_id,),
++        ).fetchone()
++        if not user:
++            conn.rollback()
++            return {"ok": False, "reason": "missing_user"}
++        if int(user["summon_charms"]) < charm_cost:
++            conn.rollback()
++            return {
++                "ok": False,
++                "reason": "not_enough_charms",
++                "charms": int(user["summon_charms"]),
++            }
++        # A second click can arrive while the first pull is being resolved.
++        # Never apply random results generated from an out-of-date pity value.
++        if int(user["pity_counter"]) != expected_pity:
++            conn.rollback()
++            return {"ok": False, "reason": "state_changed"}
++
++        placeholders = ",".join("?" for _ in warrior_ids)
++        rows = cur.execute(
++            f"SELECT warrior_id, stars FROM warrior_catalog WHERE warrior_id IN ({placeholders})",
++            warrior_ids,
++        ).fetchall()
++        catalog_stars = {int(row["warrior_id"]): int(row["stars"]) for row in rows}
++        if len(catalog_stars) != len(set(warrior_ids)):
++            conn.rollback()
++            return {"ok": False, "reason": "missing_warrior"}
++
++        cur.execute(
++            "UPDATE users SET summon_charms = summon_charms - ?, pity_counter = ? WHERE user_id = ?",
++            (charm_cost, new_pity, user_id),
++        )
++        outcomes = []
++        for warrior_id in warrior_ids:
++            stars = catalog_stars[warrior_id]
++            cur.execute(
++                """INSERT INTO user_warriors
++                   (user_id, warrior_id, stars, base_stars, level, duplicate_copies)
++                   VALUES (?, ?, ?, ?, 1, 0)""",
++                (user_id, warrior_id, stars, stars),
++            )
++            outcomes.append({
++                "result": "new",
++                "instance_id": int(cur.lastrowid),
++                "stars": stars,
++                "base_stars": stars,
++            })
++
++        if progress_date:
++            cur.execute(
++                "INSERT INTO daily_progress (user_id, date, task_key, count) VALUES (?, ?, 'pull_total', ?) "
++                "ON CONFLICT(user_id, date, task_key) DO UPDATE SET count = count + excluded.count",
++                (user_id, progress_date, len(warrior_ids)),
++            )
++
++        conn.commit()
++        return {
++            "ok": True,
++            "outcomes": outcomes,
++            "remaining_charms": int(user["summon_charms"]) - charm_cost,
++            "pity": new_pity,
++        }
++    except Exception:
++        conn.rollback()
++        raise
++    finally:
++        conn.close()
++
++
+ def get_user_warriors(user_id: int):
+     conn = get_connection()
+     cur = conn.cursor()
+@@ -1397,17 +1494,41 @@ def upsert_catalog_warrior(warrior: dict):
+     return warrior_id, was_new
+ 
+ 
+-def set_party_slot(user_id: int, position: int, user_warrior_id: int):
+-    """Places a specific owned warrior (by its user_warriors.id) into a party slot (1-6)."""
++def set_party_slot(user_id: int, position: int, user_warrior_id: int) -> bool:
++    """Place one owned warrior instance in a party slot.
++
++    A single owned *instance* may only occupy one slot.  If it was already in
++    this player's party, it is moved to the requested slot instead of being
++    silently cloned across the formation.  Separate duplicate copies remain
++    valid because they have different ``user_warriors.id`` values.
++
++    Returns ``False`` if the requested instance does not belong to ``user_id``.
++    """
+     conn = get_connection()
+-    cur = conn.cursor()
+-    cur.execute(
+-        "INSERT INTO user_party (user_id, position, user_warrior_id) VALUES (?, ?, ?) "
+-        "ON CONFLICT(user_id, position) DO UPDATE SET user_warrior_id = excluded.user_warrior_id",
+-        (user_id, position, user_warrior_id),
+-    )
+-    conn.commit()
+-    conn.close()
++    try:
++        cur = conn.cursor()
++        owned = cur.execute(
++            "SELECT 1 FROM user_warriors WHERE user_id = ? AND id = ?",
++            (user_id, user_warrior_id),
++        ).fetchone()
++        if not owned:
++            return False
++
++        # Moving an existing member should leave its old slot empty. This also
++        # cleans up any duplicate placements made by older versions of the bot.
++        cur.execute(
++            "DELETE FROM user_party WHERE user_id = ? AND user_warrior_id = ?",
++            (user_id, user_warrior_id),
++        )
++        cur.execute(
++            "INSERT INTO user_party (user_id, position, user_warrior_id) VALUES (?, ?, ?) "
++            "ON CONFLICT(user_id, position) DO UPDATE SET user_warrior_id = excluded.user_warrior_id",
++            (user_id, position, user_warrior_id),
++        )
++        conn.commit()
++        return True
++    finally:
++        conn.close()
+ 
+ 
+ def clear_party_slot(user_id: int, position: int):
+diff --git a/tests/test_database_party.py b/tests/test_database_party.py
+new file mode 100644
+index 0000000..08148d5
+--- /dev/null
++++ b/tests/test_database_party.py
+@@ -0,0 +1,74 @@
++"""Regression tests for party ownership and placement rules."""
++
++from __future__ import annotations
++
++import os
++import tempfile
++import unittest
++
++import database
++
++
++class PartyDatabaseTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.temp_dir = tempfile.TemporaryDirectory()
++        self.old_db_path = database.DB_PATH
++        self.old_catalog_cache = database._catalog_cache
++        database.DB_PATH = os.path.join(self.temp_dir.name, "test-gacha.db")
++        database._catalog_cache = None
++        database.init_db()
++
++        database.get_or_create_user(1001, "Player One")
++        database.get_or_create_user(2002, "Player Two")
++
++        conn = database.get_connection()
++        try:
++            cursor = conn.execute(
++                """
++                INSERT INTO warrior_catalog
++                    (name, element, rarity, base_hp, base_atk, base_def, base_matk, base_mdef, base_speed)
++                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++                """,
++                ("Test Hero", "Blaze", "Radiant", 100, 20, 10, 20, 10, 10),
++            )
++            self.warrior_id = cursor.lastrowid
++            conn.commit()
++        finally:
++            conn.close()
++
++        self.first_copy = database.add_warrior_to_user(1001, self.warrior_id)["instance_id"]
++        self.second_copy = database.add_warrior_to_user(1001, self.warrior_id)["instance_id"]
++        self.other_players_copy = database.add_warrior_to_user(2002, self.warrior_id)["instance_id"]
++
++    def tearDown(self) -> None:
++        database.DB_PATH = self.old_db_path
++        database._catalog_cache = self.old_catalog_cache
++        self.temp_dir.cleanup()
++
++    def test_get_user_warrior_returns_only_the_owners_copy(self) -> None:
++        warrior = database.get_user_warrior(1001, self.first_copy)
++        self.assertIsNotNone(warrior)
++        self.assertEqual(warrior["id"], self.first_copy)
++        self.assertIsNone(database.get_user_warrior(2002, self.first_copy))
++
++    def test_party_moves_an_instance_instead_of_cloning_it(self) -> None:
++        self.assertTrue(database.set_party_slot(1001, 1, self.first_copy))
++        self.assertTrue(database.set_party_slot(1001, 4, self.first_copy))
++        self.assertTrue(database.set_party_slot(1001, 2, self.second_copy))
++
++        party = database.get_party(1001)
++        self.assertEqual(set(party), {2, 4})
++        self.assertEqual(party[2]["user_warrior_id"], self.second_copy)
++        self.assertEqual(party[4]["user_warrior_id"], self.first_copy)
++
++    def test_party_rejects_another_players_instance(self) -> None:
++        self.assertTrue(database.set_party_slot(1001, 1, self.first_copy))
++        self.assertFalse(database.set_party_slot(1001, 2, self.other_players_copy))
++
++        party = database.get_party(1001)
++        self.assertEqual(set(party), {1})
++        self.assertEqual(party[1]["user_warrior_id"], self.first_copy)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_pull_batch.py b/tests/test_pull_batch.py
+new file mode 100644
+index 0000000..f04a5c1
+--- /dev/null
++++ b/tests/test_pull_batch.py
+@@ -0,0 +1,84 @@
++"""Regression tests for atomic summon persistence."""
++
++from __future__ import annotations
++
++import os
++import tempfile
++import unittest
++
++import database
++
++
++class PullBatchTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.temp_dir = tempfile.TemporaryDirectory()
++        self.old_db_path = database.DB_PATH
++        self.old_catalog_cache = database._catalog_cache
++        database.DB_PATH = os.path.join(self.temp_dir.name, "test-gacha.db")
++        database._catalog_cache = None
++        database.init_db()
++        database.get_or_create_user(3003, "Summoner")
++        database.update_user_field(3003, "summon_charms", 12)
++
++        conn = database.get_connection()
++        try:
++            self.hero_ids = []
++            for number, stars in enumerate((4, 5, 6), start=1):
++                cursor = conn.execute(
++                    """
++                    INSERT INTO warrior_catalog
++                        (name, element, rarity, stars, base_hp, base_atk, base_def, base_matk, base_mdef, base_speed)
++                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++                    """,
++                    (f"Hero {number}", "Blaze", "Test", stars, 100, 20, 10, 20, 10, 10),
++                )
++                self.hero_ids.append(cursor.lastrowid)
++            conn.commit()
++        finally:
++            conn.close()
++
++    def tearDown(self) -> None:
++        database.DB_PATH = self.old_db_path
++        database._catalog_cache = self.old_catalog_cache
++        self.temp_dir.cleanup()
++
++    def test_batch_updates_all_summon_state_in_one_operation(self) -> None:
++        result = database.apply_pull_batch(
++            3003,
++            expected_pity=0,
++            warrior_ids=[self.hero_ids[0], self.hero_ids[1], self.hero_ids[0]],
++            charm_cost=3,
++            new_pity=3,
++            progress_date="2026-09-29",
++        )
++
++        self.assertTrue(result["ok"])
++        self.assertEqual(len(result["outcomes"]), 3)
++        self.assertEqual(result["remaining_charms"], 9)
++        self.assertEqual(result["pity"], 3)
++        self.assertEqual(len(database.get_user_warriors(3003)), 3)
++
++        user = database.get_or_create_user(3003, "")
++        self.assertEqual(user["summon_charms"], 9)
++        self.assertEqual(user["pity_counter"], 3)
++        self.assertEqual(database.get_daily_progress(3003, "2026-09-29")["pull_total"], 3)
++
++    def test_state_change_rejects_the_batch_without_spending_resources(self) -> None:
++        database.update_user_field(3003, "pity_counter", 2)
++        result = database.apply_pull_batch(
++            3003,
++            expected_pity=0,
++            warrior_ids=[self.hero_ids[0]],
++            charm_cost=1,
++            new_pity=1,
++            progress_date="2026-09-29",
++        )
++
++        self.assertFalse(result["ok"])
++        self.assertEqual(result["reason"], "state_changed")
++        self.assertEqual(len(database.get_user_warriors(3003)), 0)
++        self.assertEqual(database.get_or_create_user(3003, "")["summon_charms"], 12)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/warrior_art.py b/warrior_art.py
+index e992a44..5cbdb7e 100644
+--- a/warrior_art.py
++++ b/warrior_art.py
+@@ -1,8 +1,17 @@
+ import os
+ from io import BytesIO
++
+ from PIL import Image, ImageDraw
+ 
+-ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "warriors")
++BASE_DIR = os.path.dirname(__file__)
++# The project stores art in `Assets/`.  Keep a lowercase fallback so existing
++# local installs still work, while remaining reliable on Linux hosts where
++# filenames are case-sensitive.
++ASSETS_ROOT = next(
++    (path for path in (os.path.join(BASE_DIR, "Assets"), os.path.join(BASE_DIR, "assets")) if os.path.isdir(path)),
++    os.path.join(BASE_DIR, "Assets"),
++)
++ASSETS_DIR = os.path.join(ASSETS_ROOT, "warriors")
+ PLACEHOLDER_PATH = os.path.join(ASSETS_DIR, "placeholder.png")
+ 
+ # ---------------------------------------------------------------------------
+@@ -35,17 +44,22 @@ def load_optimized_bytes(path: str, max_dimension: int = MAX_DIMENSION) -> Bytes
+     if cached and cached[0] == mtime:
+         return BytesIO(cached[1])
+ 
+-    img = Image.open(path)
++    # Detach from the file handle immediately. Reusing the encoded result from
++    # memory is dramatically quicker than decoding multi-megabyte art for
++    # every banner, party, or gallery interaction.
++    with Image.open(path) as source:
++        img = source.copy()
+     img_format = "PNG" if img.mode in ("RGBA", "P") else "JPEG"
+ 
+     if max(img.size) > max_dimension:
+-        img = img.copy()
+-        img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
++        img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+ 
+     buffer = BytesIO()
+     if img_format == "JPEG" and img.mode != "RGB":
+         img = img.convert("RGB")
+-    img.save(buffer, format=img_format, optimize=True)
++    # `optimize=True` is expensive for little visible benefit on a Discord
++    # embed. A normal PNG/JPEG encode keeps first-open latency much lower.
++    img.save(buffer, format=img_format)
+     data = buffer.getvalue()
+ 
+     _IMAGE_CACHE[path] = (mtime, data)
+@@ -69,30 +83,31 @@ def _get_cached_decoded_image(path: str, max_dimension: int = 1600) -> Image.Ima
+     if cached and cached[0] == mtime:
+         return cached[1].copy()
+ 
+-    img = Image.open(path).convert("RGBA")
++    with Image.open(path) as source:
++        img = source.convert("RGBA")
+     if max(img.size) > max_dimension:
+-        img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
++        img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+ 
+     _DECODED_IMAGE_CACHE[path] = (mtime, img)
+     return img.copy()
+ 
+-BANNER_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "banners")
++BANNER_ASSETS_DIR = os.path.join(ASSETS_ROOT, "banners")
+ BANNER_PLACEHOLDER_PATH = os.path.join(BANNER_ASSETS_DIR, "placeholder.png")
+ 
+-PARTY_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "party")
++PARTY_ASSETS_DIR = os.path.join(ASSETS_ROOT, "party")
+ PARTY_BACKGROUND_PATH = os.path.join(PARTY_ASSETS_DIR, "background.png")
+ 
+-AVATAR_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "avatars")
+-ICON_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "icons")
++AVATAR_ASSETS_DIR = os.path.join(ASSETS_ROOT, "avatars")
++ICON_ASSETS_DIR = os.path.join(ASSETS_ROOT, "icons")
+ 
+ # Full-art images (for the /heroes gallery command) are a SEPARATE set of
+-# files from battle sprites (assets/warriors/) - same warrior_id naming
++# files from battle sprites (Assets/warriors/) - same warrior_id naming
+ # convention, but its own folder, so you can use a big detailed piece of art
+ # here while keeping a simpler/smaller sprite for battle use.
+-FULLART_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "fullart")
++FULLART_ASSETS_DIR = os.path.join(ASSETS_ROOT, "fullart")
+ FULLART_PLACEHOLDER_PATH = os.path.join(FULLART_ASSETS_DIR, "placeholder.png")
+ 
+-STORY_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets", "story")
++STORY_ASSETS_DIR = os.path.join(ASSETS_ROOT, "story")
+ STORY_PLACEHOLDER_PATH = os.path.join(STORY_ASSETS_DIR, "placeholder.png")
+ 
+ 
+@@ -241,13 +256,15 @@ def build_collage(results: list, cell_size: int = 200, border_width: int = 6) ->
+ 
+         img_path = get_warrior_image_path(warrior_id)
+         try:
+-            art = Image.open(img_path).convert("RGB")
++            art = _get_cached_decoded_image(img_path, max_dimension=cell_size).convert("RGB")
+         except Exception:
+             art = Image.new("RGB", (cell_size, cell_size), (80, 80, 80))
+ 
+-        # Resize/crop art to fill the inner cell (leaving room for the border)
++        # Resize/crop art to fill the inner cell (leaving room for the border).
++        # Source art is cached, so a 10-pull does not decode the same image
++        # repeatedly when duplicate heroes appear.
+         inner_size = cell_size - (border_width * 2)
+-        art = art.resize((inner_size, inner_size))
++        art = art.resize((inner_size, inner_size), Image.Resampling.LANCZOS)
+ 
+         # Paste the colored border as a filled rectangle, then the art on top
+         draw = ImageDraw.Draw(canvas)
