@@ -1,0 +1,11 @@
+chapter_number,title,description,story_text,boss_name,boss_element,boss_stars,reward_solite,reward_charms,reward_exp,enemy1,enemy2,enemy3,enemy4,enemy5,enemy6,enemy1_level,enemy2_level,enemy3_level,enemy4_level,enemy5_level,enemy6_level
+1,The Awakening,A strange rift tears open at the edge of town. Something ancient stirs within.,"A white streak ran across space, like a divide between dream and reality. Though it's consequence I will soon realize, for that moment I thought it to be beautiful. Like a distinction between fantasy and boring reality, of that distinction, I would soon learn but for that moment, I found it beautiful.",Rift Stalker,Shade,4,150,2,500,keil,,,,,,1,1,1,1,1,1
+2,Embers of Rebellion,The Blaze tribes have gone silent. What you find in their camp is not what you expected.,"Smoke still rises from the camp, but there are no fires burning - only embers, scattered like they were flung outward in a single violent moment. The tents are empty. Weapons lie untouched in the dirt.
+
+You've heard of the Blaze tribes' discipline - warriors who never left a post unguarded, never let a fire die unattended. To find the camp like this means something drove them out fast, or worse.
+[PAGE]At the center of the clearing, something massive has scorched the earth into glass. The heat still radiates off it, hours after whatever happened here.
+
+You don't have to wait long before it notices you.",Cinder Warden,Blaze,4,150,2,750,keil,fernwick,,,,,2,2,1,1,1,1
+3,Tides of Betrayal,A once-peaceful lake now churns with unnatural fury.,"The lake was sacred once - a place of quiet reflection, where the old stories say the first warriors made their pacts. Now the water churns black and restless, and the fish have long since fled or died.
+
+Something beneath the surface remembers being wronged, and it has decided the debt is owed to whoever stands on the shore next.",Drowned Sovereign,Teal,4,150,2,1000,keil,vale,fernwick,,,,3,3,3,1,1,1
