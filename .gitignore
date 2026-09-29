@@ -1,0 +1,31 @@
+# Secrets — never upload these
+.env
+.env.*
+token.txt
+secrets.json
+config.json
+
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+logs/
+
+# Local databases and bot data
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Editor / operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
